@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, readdir } from 'node:fs/promises'
+import type { Dirent } from 'node:fs'
 import { createInterface } from 'node:readline/promises'
 try { process.loadEnvFile('.env') } catch {}
 
@@ -42,7 +43,19 @@ if (!apiKey) {
 const baseUrl = process.env.OPENAI_BASE_URL
 const model = process.env.AGENT_MODEL
 
-const tools = [{
+type ToolDefinition = {
+    type: "function",
+    function: {
+        name: string
+        description: string
+        parameters: {
+            type: "object",
+            properties: Record<string, unknown>
+            required?: string[]
+        }
+    }
+}
+const tools: ToolDefinition[] = [{
                 type: "function",
                 function: {
                     name: "read_file",
@@ -55,7 +68,21 @@ const tools = [{
                         required: ["path"]
                     }
                 }
-            }]
+                },
+                {
+                type: "function",
+                function: {
+                    name: "list_dir",
+                    description: "列出目录里内容",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            path: { type: "string", description: "目录路径"}
+                        },
+                        required: ["path"]
+                    }
+                }
+                }]
 
 for (;;)
 {
@@ -157,12 +184,28 @@ for (;;)
                 else {
                     for (const call of message.tool_calls)
                     {
-                        const args = JSON.parse(call.function.arguments)
-                        if (call.function.name === "read_file")
-                        {
-                            const fileData = await readFile(args.path, 'utf8')
-                            history.push({ role: 'tool', tool_call_id: call.id, content: fileData})
+                        let content: string
+                        console.log(`\n⚙ ${call.function.name} ${call.function.arguments}`)
+                        try {
+                            const args = JSON.parse(call.function.arguments)
+                            if (call.function.name === "read_file")
+                            {
+                                const fileData = await readFile(args.path, 'utf8')
+                                content = fileData
+                            } else if (call.function.name === "list_dir")
+                            {
+                                const entries: Dirent[] = await readdir(args.path, { withFileTypes: true });
+                                const onlyFiles = entries.filter(entry => entry.isFile()).map(entry => entry.name);
+                                const onlyDirs = entries.filter(entry => entry.isDirectory()).map(entry => entry.name);
+                                content = formatDirContent(onlyFiles, onlyDirs)
+                            } else {
+                                content = `Error: 没有名为 "${call.function.name}" 的工具。可用工具：read_file、list_dir。`
+                            }
+                        } catch (err) {
+                            content = `Error: ${err instanceof Error ? err.message : String(err)}`
                         }
+                        history.push({ role: 'tool', tool_call_id: call.id, content: content})
+                        console.log(`  → ${content.split('\n')[0].slice(0, 80)}`)
                     }
                 }
             }
@@ -175,3 +218,15 @@ for (;;)
     }
 }
 r1.close()
+
+function formatDirContent(onlyFiles: string[], onlyDirs: string[]): string {
+  const fileText = onlyFiles.length > 0
+    ? onlyFiles.map(name => `- ${name}`).join('\n')
+    : '（无文件）';
+
+  const dirText = onlyDirs.length > 0
+    ? onlyDirs.map(name => `- ${name}`).join('\n')
+    : '（无目录）';
+
+  return `文件：\n${fileText}\n\n目录：\n${dirText}`;
+}
