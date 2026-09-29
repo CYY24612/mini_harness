@@ -27,11 +27,33 @@ type ToolCall = {
 }
 
 type ChatMessage = 
+    | { role: 'system'; content: string }
     | { role: 'user'; content: string }
     | { role: 'assistant'; content: string | null; tool_calls?: ToolCall[] }
     | { role: 'tool'; tool_call_id: string; content: string }
 
-const history: ChatMessage[] = []
+const history: ChatMessage[] = [
+    { role: 'system', content: buildSystemPrompt() }
+]
+
+function buildSystemPrompt(projectDesc: string = "一个本地 coding agent 实验项目"): string {
+    const cwd = process.cwd()
+
+    return `你是运行在用户本机上的 coding agent。
+
+工作目录：${cwd}
+（所有工具的路径参数都相对于它，"." 表示当前目录）
+
+这个项目：${projectDesc}
+
+工作方式：
+- 先看清现状再回答，不要凭猜测
+- 回答简洁
+
+边界：
+- 只能访问工作目录内的文件
+- .env 等敏感文件被禁止访问。被拒绝时不要尝试其他写法绕过。`
+}
 
 const isStrem = false
 
@@ -92,9 +114,9 @@ async function main() {
         const answer = await r1.question('你 > ')
         if (answer === 'break') break;
 
+        const mark = history.length
         history.push({ role: 'user', content: answer })
         
-        const mark = history.length
 
         try {
 
