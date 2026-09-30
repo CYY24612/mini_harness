@@ -1,7 +1,7 @@
 import type { ToolDefinition } from './types.ts'
-import { readFile, readdir } from 'node:fs/promises'
+import { readFile, readdir, writeFile, mkdir } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
-import { resolve, relative, isAbsolute, sep, basename, extname } from 'node:path'
+import { resolve, relative, isAbsolute, sep, basename, extname, dirname } from 'node:path'
 
 export type Tool = {
     definition: ToolDefinition                      // 给模型看的
@@ -51,6 +51,30 @@ export const tools: Tool[] = [
             const onlyFiles = entries.filter(entry => entry.isFile()).map(entry => entry.name);
             const onlyDirs = entries.filter(entry => entry.isDirectory()).map(entry => entry.name);
             return formatDirContent(onlyFiles, onlyDirs)
+        }
+    },
+    {
+        definition: {
+            type: "function",
+            function: {
+                name: "write_file",
+                description: "把内容整体覆盖进文件，修改前最好read_file一下",
+                parameters: {
+                    type: "object",
+                    properties: {
+                        path: { type: "string", description: "文件路径"},
+                        content: { type: "string", description: "要写入的文件内容"}
+                    },
+                    required: ["path", "content"]
+                }
+            }
+        },
+        run: async (args) => {
+            const abs = resolveInCwd(args.path)
+            assertNotSecret(abs)
+            await mkdir(dirname(abs), { recursive: true} )
+            await writeFile(abs, args.content, 'utf-8')
+            return `已写入 ${args.path}（${args.content.split('\n').length} 行，${args.content.length} 字符）`
         }
     }
 ]
@@ -142,7 +166,7 @@ export function assertNotSecret(abs: string): void {
     for (const prefix of BLOCKED_PREFIXES) {
         if (name.startsWith(prefix.toLowerCase())) {
             throw new Error(
-                `Error: 禁止访问敏感文件 —— "${name}" 匹配前缀 "${prefix}"。`
+                `禁止访问敏感文件 —— "${name}" 匹配前缀 "${prefix}"。`
             )
         }
     }
@@ -151,7 +175,7 @@ export function assertNotSecret(abs: string): void {
     for (const blocked of BLOCKED_NAMES) {
         if (name === blocked.toLowerCase()) {
             throw new Error(
-                `Error: 禁止访问敏感文件 —— "${name}" 在固定名黑名单中。`
+                `禁止访问敏感文件 —— "${name}" 在固定名黑名单中。`
             )
         }
     }
@@ -160,7 +184,7 @@ export function assertNotSecret(abs: string): void {
     for (const blockedExt of BLOCKED_EXTS) {
         if (ext === blockedExt.toLowerCase()) {
             throw new Error(
-                `Error: 禁止访问敏感文件 —— 后缀 "${ext}" 属于敏感类型。`
+                `禁止访问敏感文件 —— 后缀 "${ext}" 属于敏感类型。`
             )
         }
     }

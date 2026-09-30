@@ -3,6 +3,7 @@ import type { ChatMessage } from './types.ts'
 import type { ApiConfig } from './provider.ts'
 import { runTurn } from './agent.ts'
 import type { AgentEvent } from './agent.ts'
+import { tools } from './tools.ts'
 try { process.loadEnvFile('.env') } catch {}
 
 const r1 = createInterface({ input: process.stdin, output: process.stdout})
@@ -42,6 +43,15 @@ if (!apiKey || !baseUrl || !model) {
 const config: ApiConfig = { baseUrl, apiKey, model }
 
 async function main() {
+    for (const t of tools) {
+        const { name, parameters } = t.definition.function
+        for (const req of parameters.required ?? []) {
+            if (!(req in (parameters.properties ?? {}))) {
+                console.warn(`⚠️ 工具 ${name}：required 里的 "${req}" 没有在 properties 声明`)
+            }
+        }
+    }
+    
     for (;;)
     {
         const answer = await r1.question('你 > ')
