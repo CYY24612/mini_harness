@@ -3,9 +3,12 @@ import { readFile, readdir, writeFile, mkdir } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
 import { resolve, relative, isAbsolute, sep, basename, extname, dirname } from 'node:path'
 
+export type Approver = (request: { tool: string; args: any }) => Promise<boolean>
+
 export type Tool = {
     definition: ToolDefinition                      // 给模型看的
     pathArg: string | null
+    requiresApproval: boolean
     run: (args: any) => Promise<string>             // 本地执行的
 }
 
@@ -26,6 +29,7 @@ export const tools: Tool[] = [
             }
         },
         pathArg: 'path',
+        requiresApproval: false,
         run: async (args) => {
             return await readFile(args.path, 'utf8')
         }      
@@ -46,6 +50,7 @@ export const tools: Tool[] = [
             }
         },
         pathArg: 'path',
+        requiresApproval: false,
         run: async (args) => {
             const entries: Dirent[] = await readdir(args.path, { withFileTypes: true });
             const onlyFiles = entries.filter(entry => entry.isFile()).map(entry => entry.name);
@@ -70,6 +75,7 @@ export const tools: Tool[] = [
             }
         },
         pathArg: 'path',
+        requiresApproval: true,
         run: async (args) => {
             await mkdir(dirname(args.path), { recursive: true} )
             await writeFile(args.path, args.content, 'utf-8')
@@ -78,7 +84,11 @@ export const tools: Tool[] = [
     }
 ]
 
-export async function runTool(name: string, args: any): Promise<string> {
+export async function runTool(
+    name: string, 
+    args: any,
+    approve: Approver,
+): Promise<string> {
     const tool = findTool(name)
     if (!tool) {
         throw new Error(
@@ -91,6 +101,13 @@ export async function runTool(name: string, args: any): Promise<string> {
         const abs = resolveInCwd(args[tool.pathArg])
         assertNotSecret(abs)
         args[tool.pathArg] = abs
+    }
+
+    if (tool.requiresApproval) {
+        const ok = await approve({ tool: name, args })
+        if (!ok) {
+            return `用户拒绝了这个操作。不要重试，改为向用户说明你想做什么、为什么需要它。`
+        }
     }
 
     return await tool.run(args)

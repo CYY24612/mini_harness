@@ -1,5 +1,5 @@
 import { chat } from './provider.ts'
-import { tools, runTool } from './tools.ts'
+import { tools, runTool, type Approver } from './tools.ts'
 import type { ApiConfig } from './provider.ts'
 import type { ChatMessage } from './types.ts'
 
@@ -13,6 +13,7 @@ export async function runTurn(
     config: ApiConfig,
     history: ChatMessage[],
     emit: (event: AgentEvent) => void,
+    approve: Approver,
     maxSteps = 10,
 ): Promise<void> {
     let steps = 0
@@ -34,7 +35,7 @@ export async function runTurn(
 
             const args = JSON.parse(call.function.arguments)
             try {
-                content = await runTool(call.function.name, args)
+                content = await runTool(call.function.name, args, approve)
             } catch (err) {
                 content = `Error: ${err instanceof Error ? err.message : String(err)}`
             }

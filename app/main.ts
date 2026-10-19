@@ -3,7 +3,7 @@ import type { ChatMessage } from './types.ts'
 import type { ApiConfig } from './provider.ts'
 import { runTurn } from './agent.ts'
 import type { AgentEvent } from './agent.ts'
-import { tools } from './tools.ts'
+import { tools, type Approver } from './tools.ts'
 try { process.loadEnvFile('.env') } catch {}
 
 const r1 = createInterface({ input: process.stdin, output: process.stdout})
@@ -42,6 +42,13 @@ if (!apiKey || !baseUrl || !model) {
 
 const config: ApiConfig = { baseUrl, apiKey, model }
 
+const approve: Approver = async ({ tool, args }) => {
+    const answer = await r1.question(
+        `\n  ⚠️  即将执行 ${tool} ${JSON.stringify(args)}\n  允许吗？(y/N) `
+    )
+    return answer.trim().toLowerCase() === 'y'
+}
+
 async function main() {
     for (const t of tools) {
         const { name, parameters } = t.definition.function
@@ -62,7 +69,7 @@ async function main() {
         
 
         try {
-            await runTurn(config, history, render)
+            await runTurn(config, history, render, approve)
 
         } catch (err) {
             console.log('\n请求失败:', err instanceof Error ? err.message : String(err))
