@@ -5,6 +5,7 @@ import { resolve, relative, isAbsolute, sep, basename, extname, dirname } from '
 
 export type Tool = {
     definition: ToolDefinition                      // 给模型看的
+    pathArg: string | null
     run: (args: any) => Promise<string>             // 本地执行的
 }
 
@@ -24,10 +25,9 @@ export const tools: Tool[] = [
                 }
             }
         },
+        pathArg: 'path',
         run: async (args) => {
-            const abs = resolveInCwd(args.path)
-            assertNotSecret(abs)
-            return await readFile(abs, 'utf8')
+            return await readFile(args.path, 'utf8')
         }      
     },
     {
@@ -45,9 +45,9 @@ export const tools: Tool[] = [
                 }
             }
         },
+        pathArg: 'path',
         run: async (args) => {
-            const abs = resolveInCwd(args.path)
-            const entries: Dirent[] = await readdir(abs, { withFileTypes: true });
+            const entries: Dirent[] = await readdir(args.path, { withFileTypes: true });
             const onlyFiles = entries.filter(entry => entry.isFile()).map(entry => entry.name);
             const onlyDirs = entries.filter(entry => entry.isDirectory()).map(entry => entry.name);
             return formatDirContent(onlyFiles, onlyDirs)
@@ -69,17 +69,34 @@ export const tools: Tool[] = [
                 }
             }
         },
+        pathArg: 'path',
         run: async (args) => {
-            const abs = resolveInCwd(args.path)
-            assertNotSecret(abs)
-            await mkdir(dirname(abs), { recursive: true} )
-            await writeFile(abs, args.content, 'utf-8')
+            await mkdir(dirname(args.path), { recursive: true} )
+            await writeFile(args.path, args.content, 'utf-8')
             return `已写入 ${args.path}（${args.content.split('\n').length} 行，${args.content.length} 字符）`
         }
     }
 ]
 
-export function findTool(name: string): Tool | undefined {
+export async function runTool(name: string, args: any): Promise<string> {
+    const tool = findTool(name)
+    if (!tool) {
+        throw new Error(
+            `没有名为 "${name}" 的工具。可用工具` + 
+            tools.map(t => t.definition.function.name).join('、') + '。'
+        )
+    }
+
+    if (tool.pathArg) {
+        const abs = resolveInCwd(args[tool.pathArg])
+        assertNotSecret(abs)
+        args[tool.pathArg] = abs
+    }
+
+    return await tool.run(args)
+}
+
+function findTool(name: string): Tool | undefined {
     return tools.find(t => t.definition.function.name === name)
 }
 

@@ -1,5 +1,5 @@
 import { chat } from './provider.ts'
-import { tools, findTool } from './tools.ts'
+import { tools, runTool } from './tools.ts'
 import type { ApiConfig } from './provider.ts'
 import type { ChatMessage } from './types.ts'
 
@@ -33,17 +33,10 @@ export async function runTurn(
             emit({ type: 'tool-start', name: call.function.name, args: call.function.arguments})
 
             const args = JSON.parse(call.function.arguments)
-            const tool = findTool(call.function.name)
-            if (!tool)
-            {
-                content = `Error: 没有名为 "${call.function.name}" 的工具。` +
-                    `可用工具：${tools.map(t => t.definition.function.name).join('、')}。`
-            } else {
-                try {
-                    content = await tool.run(args)
-                } catch (err) {
-                    content = `Error: ${err instanceof Error ? err.message : String(err)}`
-                }
+            try {
+                content = await runTool(call.function.name, args)
+            } catch (err) {
+                content = `Error: ${err instanceof Error ? err.message : String(err)}`
             }
 
             history.push({ role: 'tool', tool_call_id: call.id, content: content})
