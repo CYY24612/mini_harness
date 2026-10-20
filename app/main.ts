@@ -4,6 +4,23 @@ import type { ApiConfig } from './provider.ts'
 import { runTurn } from './agent.ts'
 import type { AgentEvent } from './agent.ts'
 import { tools, type Approver } from './tools.ts'
+import { createSession, loadEvents } from './session.ts'
+
+const sessionId = 'default'
+const sessionFile = `./session/${sessionId}.jsonl`
+
+const wantResume = process.argv.includes('--resume')
+
+const system = buildSystemPrompt()
+const oldEvents = wantResume ? loadEvents(sessionFile) : []
+
+const session = createSession({ id: sessionId, system, file: sessionFile, events: oldEvents })
+
+console.log(wantResume
+    ? `已恢复会话 ${sessionId}（${oldEvents.length} 条事件）`
+    : `新会话 ${sessionId}`)
+console.log(`日志：${sessionFile}\n`)
+
 try { process.loadEnvFile('.env') } catch {}
 
 const r1 = createInterface({ input: process.stdin, output: process.stdout})
@@ -64,16 +81,15 @@ async function main() {
         const answer = await r1.question('你 > ')
         if (answer === 'break') break;
 
-        const mark = history.length
-        history.push({ role: 'user', content: answer })
+        const mark = session.events.length
+        session.append({ type: 'user', content: answer })
         
-
         try {
-            await runTurn(config, history, render, approve)
+            await runTurn(config, session, render, approve)
 
         } catch (err) {
             console.log('\n请求失败:', err instanceof Error ? err.message : String(err))
-            history.length = mark
+            session.truncate(mark)
         }
 
     }

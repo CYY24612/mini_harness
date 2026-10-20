@@ -2,6 +2,7 @@ import { chatStream } from './provider.ts'
 import { tools, runTool, type Approver } from './tools.ts'
 import type { ApiConfig } from './provider.ts'
 import type { ChatMessage } from './types.ts'
+import type { Session } from './session.ts'
 
 export type AgentEvent =
     | { type: 'text'; text: string }
@@ -14,7 +15,7 @@ export type AgentEvent =
 
 export async function runTurn(
     config: ApiConfig,
-    history: ChatMessage[],
+    session: Session,
     emit: (event: AgentEvent) => void,
     approve: Approver,
     maxSteps = 10,
@@ -26,11 +27,11 @@ export async function runTurn(
 
         const message = await chatStream (
             config, 
-            history, 
+            session.messages(), 
             tools.map(t => t.definition),
             emit
         )
-        history.push({ role: 'assistant', content: message.content, tool_calls: message.tool_calls})
+        session.append({ type: 'assistant', content: message.content, tool_calls: message.tool_calls})
         if (!message.tool_calls || message.tool_calls.length === 0)
         {
             emit({ type: 'answer-end' })
@@ -48,7 +49,7 @@ export async function runTurn(
                 content = `Error: ${err instanceof Error ? err.message : String(err)}`
             }
 
-            history.push({ role: 'tool', tool_call_id: call.id, content: content})
+            session.append({ type: 'tool', tool_call_id: call.id, content: content})
             emit({ type: 'tool-end', content})
             
         }
