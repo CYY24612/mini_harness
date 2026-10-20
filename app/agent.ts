@@ -1,12 +1,15 @@
-import { chat } from './provider.ts'
+import { chatStream } from './provider.ts'
 import { tools, runTool, type Approver } from './tools.ts'
 import type { ApiConfig } from './provider.ts'
 import type { ChatMessage } from './types.ts'
 
 export type AgentEvent =
+    | { type: 'text'; text: string }
+    | { type: 'thinking' }
+    | { type: 'thinking-end' }
+    | { type: 'answer-end' }
     | { type: 'tool-start'; name: string; args: string }
     | { type: 'tool-end'; content: string }
-    | { type: 'answer'; text: string }
     | { type: 'step-limit' }
 
 export async function runTurn(
@@ -21,11 +24,16 @@ export async function runTurn(
         steps += 1
         if (steps > maxSteps) { emit({ type: 'step-limit' }); break }
 
-        const message = await chat (config, history, tools.map(t => t.definition))
+        const message = await chatStream (
+            config, 
+            history, 
+            tools.map(t => t.definition),
+            emit
+        )
         history.push({ role: 'assistant', content: message.content, tool_calls: message.tool_calls})
         if (!message.tool_calls || message.tool_calls.length === 0)
         {
-            emit({ type: 'answer', text: message.content ?? '' })
+            emit({ type: 'answer-end' })
             break
         }
 

@@ -82,9 +82,12 @@ async function main() {
 
 function render(event: AgentEvent): void {
     switch (event.type) {
+        case 'text':       process.stdout.write(event.text); break
+        case 'thinking':   process.stdout.write('💭 思考中…'); break
+        case 'thinking-end':   process.stdout.write('\n'); break
+        case 'answer-end': console.log(); break
         case 'tool-start': console.log(`\n⚙ ${event.name} ${event.args}`); break
         case 'tool-end':   console.log(`  → ${event.content.split('\n')[0].slice(0, 80)}`); break
-        case 'answer':     console.log(event.text); break
         case 'step-limit': console.log('\n[达到步数上限，强制结束这一轮对话]'); break
     }
 }
