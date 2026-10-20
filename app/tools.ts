@@ -31,7 +31,7 @@ export const tools: Tool[] = [
         pathArg: 'path',
         requiresApproval: false,
         run: async (args) => {
-            return await readFile(args.path, 'utf8')
+            return await withRetry(() => readFile(args.path, 'utf8')) 
         }      
     },
     {
@@ -78,8 +78,68 @@ export const tools: Tool[] = [
         requiresApproval: true,
         run: async (args) => {
             await mkdir(dirname(args.path), { recursive: true} )
-            await writeFile(args.path, args.content, 'utf-8')
+            await withRetry(() => writeFile(args.path, args.content, 'utf-8'))
             return `已写入 ${args.path}（${args.content.split('\n').length} 行，${args.content.length} 字符）`
+        }
+    },
+    {
+        definition: {
+            type: "function",
+            function: {
+                name: "str_replace",
+                description: "在文件里做精确的局部替换：把 old_string 换成 new_string。old_string 必须和文件内容完全一致（包括空格、缩进、换行），并且必须在文件中只出现一次 —— 出现多次会失败，这时需要带上更多上下文让它唯一。修改已有文件前应该先 read_file 确认原文。",
+                parameters: {
+                    type: "object",
+                    properties: {
+                        path: { type: "string", description: "要修改的文件路径" },
+                        old_string: { type: "string", description: "要被替换的原文，必须和文件里的完全一致（含空格、缩进），且在全文中唯一出现" },
+                        new_string: { type: "string", description: "替换后的新文本" },
+                    },
+                    required: ["path", "old_string", "new_string"]
+                }
+                
+            }
+        },
+        pathArg: 'path',
+        requiresApproval: true,
+        run: async (args) => {
+            if (typeof args.old_string !== 'string' || args.old_string === '') {
+                throw new Error('old_string 不能为空，否则无法定位要改哪里。')
+            }
+            if (typeof args.new_string !== 'string') {
+                throw new Error('new_string 必须是字符串（要删除文本时传空字符串 ""）。')
+            }
+
+            const content = await withRetry(() => readFile(args.path, 'utf8'))
+
+            const eol = content.includes('\r\n') ? '\r\n' : '\n'
+
+            const toEol = (s: string) => s.replace(/\r?\n/g, eol)
+            const oldText = toEol(args.old_string)
+            const newText = toEol(args.new_string)
+
+            const count = content.split(oldText).length - 1
+
+            if (count === 0) {
+                throw new Error(
+                    `在 ${args.path} 里找不到这段文本。` +
+                    `常见原因：缩进或空格不一致、或者文件已经被改过。` +
+                    `请重新 read_file 确认当前内容后再试。`
+                )
+            }
+
+            if (count > 1) {
+                throw new Error(
+                    `这段文本在 ${args.path} 里出现了 ${count} 次，无法确定要改哪一处。` +
+                    `请把 old_string 写得更长一些（带上前后几行），确保它只出现一次。`
+                )
+            }
+
+            const updated = content.replace(oldText, () => newText)
+            await withRetry(() => writeFile(args.path, updated, 'utf8'))
+
+            return `已修改 ${args.path}：替换 1 处。` +
+                   `文件从 ${content.split('\n').length} 行变成 ${updated.split('\n').length} 行。`
         }
     }
 ]
@@ -222,4 +282,19 @@ export function assertNotSecret(abs: string): void {
             )
         }
     }
+}
+
+async function withRetry<T>(fn: () => Promise<T>, tries = 5): Promise<T> {
+    for (let i = 0; i < tries; i++) {
+        try {
+            return await fn()
+        } catch (err) {
+            const code = (err as { code?: string }).code
+            const retriable = code === 'EBUSY' || code === 'EPERM' || code === 'EACCES'
+            if (!retriable || i === tries -1) throw err
+
+            await new Promise(r => setTimeout(r, 100 * (i + 1)))
+        }
+    }
+    throw new Error('withRetry: unreachable')
 }
