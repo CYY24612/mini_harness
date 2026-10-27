@@ -231,7 +231,8 @@ export const tools: Tool[] = [
                         maxBuffer: 10 * 1024 * 1024,
                         windowsHide: true,
                         env: safeEnv(),
-                        encoding: 'buffer'
+                        encoding: 'buffer',
+                        windowsVerbatimArguments: true
                     },
                     (err, stdout, stderr) => {
                         const e = err as (Error & { code?: number | string; killed?: boolean }) | null
