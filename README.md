@@ -1,6 +1,6 @@
 # 一个手写的极简 Coding Agent
 
-> 约 600 行 TypeScript，从零实现的最小 coding agent。
+> 约 890 行 TypeScript，从零实现的最小 coding agent。
 > **零运行时依赖，无构建步骤** —— Node 24 原生执行 `.ts`。
 
 这个项目的目标不是"又一个调 SDK 的 demo"，而是把 agent 的每一层拆开、自己写一遍：
@@ -32,7 +32,7 @@
 
 ## 能力
 
-**四个工具**
+**五个工具**
 
 | 工具 | 审批 | 说明 |
 |---|:---:|---|
@@ -40,14 +40,18 @@
 | `list_dir` | — | 列目录（文件/目录分组） |
 | `write_file` | ✅ | 整体覆盖写入 |
 | `str_replace` | ✅ | 精确局部替换，**要求匹配唯一** |
+| `run_shell` | ✅ | 跑命令（`tsc` / 测试 / 构建），返回退出码 + stdout + stderr |
 
 **harness 层**
 
 - **流式输出**：文本逐字显示；`tool_calls` 按 `index` 归并（参数是分片来的）
+- **思考提示**：模型真正推理时才显示 `💭`（不是每轮无脑闪一下）
 - **沙箱**：所有路径 `resolve` 后校验必须在工作目录内
 - **敏感文件黑名单**：`.env` / `*.pem` / `*.key` / `id_rsa` 等，前缀 + 固定名 + 后缀三档匹配
 - **审批**：写操作前暂停，显示**解析后的真实绝对路径**（不是模型声称的路径）
 - **会话持久化**：append-only 事件日志落 JSONL，`--resume` 恢复
+- **token 计量**：每轮显示 `⤷ 上下文 N tokens · 输出 M（其中思考 K）`
+- **命令执行**：超时可配、输出首尾保留中段截断、子进程环境变量剔除密钥
 - **重试**：文件被占用（`EBUSY`/`EPERM`）时线性退避重试
 - **步数上限**：防死循环烧钱
 
@@ -57,12 +61,14 @@
 
 ```
 app/
-├─ main.ts        87 行   REPL · 装配 · 渲染 · --resume
-├─ agent.ts       51 行   while 循环 · 工具编排 · 步数上限
-├─ provider.ts   106 行   HTTP · SSE 解析 · tool_calls 累积
-├─ tools.ts      267 行   4 个工具 · 沙箱 · 审批 · 派发
-├─ session.ts     81 行   事件日志 · 投影 · JSONL 落盘
-└─ types.ts       35 行   纯类型
+├─ main.ts       128 行   REPL · 装配 · 渲染 · --resume
+├─ agent.ts       56 行   while 循环 · 工具编排 · 步数上限
+├─ provider.ts   155 行   HTTP · SSE 解析 · tool_calls 累积 · usage
+├─ tools.ts      415 行   5 个工具 · 沙箱 · 审批 · 派发
+├─ session.ts     95 行   事件日志 · 投影 · JSONL 落盘
+└─ types.ts       39 行   纯类型
+
+                888 行   合计
 ```
 
 **依赖方向单一向下，无环：**
@@ -112,7 +118,7 @@ npm run typecheck         # 类型检查（tsc --noEmit）
 
 ---
 
-## 五个值得说的设计决定
+## 六个值得说的设计决定
 
 ### 1. 日志是唯一真相，请求是投影
 
@@ -152,16 +158,40 @@ requiresApproval: boolean     // 同上
 
 ```ts
 let content: string
-if (!tool)      content = `Error: 没有名为...`
-else try        content = await tool.run(args)
-     catch      content = `Error: ${...}`
+try {
+    const args = JSON.parse(call.function.arguments)    // 也放在 try 里
+    content = await runTool(call.function.name, args, approve)
+} catch (err) {
+    content = `Error: ${...}`
+}
 
-history.push({ role: 'tool', tool_call_id: call.id, content })   // 无条件 push
+session.append({ type: 'tool', tool_call_id: call.id, content })   // 无条件 append
 ```
 
 `content` 是 `string`（不是 `string | undefined`），所以**每条路径都必须赋值**。
 一旦漏了，编译不过。于是"每个 tool_call 都有配对结果"这条协议要求就**不可能被忘记**——
 而它是 OpenAI / Anthropic 都会在下一轮用 400 拒绝你的硬约束。
+
+> `JSON.parse` 曾经在 `try` **外面** —— 模型吐出半截 JSON 时会抛到最外层，
+> 触发整轮回滚，连已经成功的工具结果一起丢掉。挪进 `try` 之后它只是一条错误消息。
+
+### 6. 有一个工具无法沙箱化 —— 所以它的安全模型是"人"
+
+`read_file` / `write_file` / `str_replace` 都受 `resolveInCwd` + `assertNotSecret` 保护，
+那是**代码层面的真防护**。
+
+`run_shell` 没有。任意命令的行为无法静态判定 ——
+`cd .. && del /s /q *`、`type ..\..\.env`、`curl xxx | sh`，没有一条规则能覆盖。
+
+所以这个工具的唯一防线是 **`requiresApproval` + 让人看懂命令**：
+
+- `pathArg: null` —— 没有路径可以给沙箱校验
+- 审批提示用 `JSON.stringify(args)` 原样展示 —— JSON 转义精确到字节，不会被同形字或空白骗过去
+- 子进程的环境变量剔除 `KEY` / `TOKEN` / `SECRET` / `PASSWORD` —— 防止 `echo %OPENAI_API_KEY%` 绕过文件黑名单
+- 超时和输出截断只是**止损**，不是防护
+
+**这是整个项目里唯一一处「安全性不由代码保证」的地方。**
+诚实地写出来，比假装它和别的工具一样安全要好。
 
 ---
 
@@ -171,6 +201,9 @@ history.push({ role: 'tool', tool_call_id: call.id, content })   // 无条件 pu
 - `str_replace` 没有 diff 预览（审批时看到的是原始参数）
 - 上下文不压缩：工具读进来的大文件会一直留在历史里
 - 单会话（固定 `default`），没有多会话管理
+- **`run_shell` 在 Windows 上对 GBK 输出做了针对性解码**（`TextDecoder('gbk')` 兜底）。
+  这是中文 Windows 的补丁，不是通用方案 —— Node 没有读 OEM 代码页的接口，换 locale 可能需要调整
+- `run_shell` 的 `timeout` 在 Windows 上只杀 `cmd.exe`，不保证杀掉它的子进程
 - 没有 `edit` 之外的结构化编辑（重命名、批量替换等）
 
 ---

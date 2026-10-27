@@ -2,8 +2,45 @@ import type { ToolDefinition } from './types.ts'
 import { readFile, readdir, writeFile, mkdir } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
 import { resolve, relative, isAbsolute, sep, basename, extname, dirname } from 'node:path'
+import { execFile } from "node:child_process"
+import { stderr } from 'node:process'
+
+const IS_WIN = process.platform === 'win32'
 
 export type Approver = (request: { tool: string; args: any }) => Promise<boolean>
+
+function truncateOutput(text: string, maxChars = 4000): string {
+    if (text.length <= maxChars) return text
+    const headlen = Math.floor(maxChars * 0.4);
+    const taillen = maxChars - headlen;
+    const head = text.slice(0, headlen);
+    const tail = text.slice(text.length - taillen);
+    const omitted = text.length - headlen - taillen
+    return `${head}\n\n...(中间省略${omitted}字符)...\n\n${tail}`
+}
+
+function safeEnv(): Record<string, string> {
+    const out: Record<string, string> = {}
+    for (const [k, v] of Object.entries(process.env)) {
+        if (typeof v != 'string') continue
+        if (/(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)/i.test(k)) continue
+        out[k] = v
+    }
+    return out
+}
+
+function decodeOutput(raw: Buffer | string): string {
+    if (typeof raw === 'string') return raw
+    try {
+        return new TextDecoder('utf-8', { fatal: true }).decode(raw)
+    } catch {
+        try {
+            return new TextDecoder('gbk').decode(raw)
+        } catch {
+            return raw.toString('utf8')
+        }
+    }
+}
 
 export type Tool = {
     definition: ToolDefinition                      // 给模型看的
@@ -140,6 +177,84 @@ export const tools: Tool[] = [
 
             return `已修改 ${args.path}：替换 1 处。` +
                    `文件从 ${content.split('\n').length} 行变成 ${updated.split('\n').length} 行。`
+        }
+    },
+    {
+        definition: {
+            type: "function",
+            function: {
+                name: "run_shell",
+                description:
+                    `在项目目录下执行一条命令。` +
+                    (IS_WIN
+                        ? '当前平台是 Windows，命令由 cmd.exe 执行：用 cmd 语法（&&、%VAR%、|），' +
+                        '不要用 bash 语法（head、grep、$VAR、;(分号)、$?、PIPESTATUS）。'
+                        : '当前平台是 POSIX，命令由 /bin/sh 执行。') +
+                    `用来验证改动：跑类型检查、跑测试、跑构建。` +
+                    `不要执行不会自行结束的交互式命令（如 npm run dev、vim）。` +
+                    `输出过长时会截断中间部分。`,
+                parameters: {
+                    type: "object",
+                    properties: {
+                        command: {
+                            type: "string",
+                            description: "完整命令行。可以 cd 到子目录，也可以用 && 串联多条命令",
+                        },
+                        timeout_ms: {
+                            type: "number",
+                            description: "超时毫秒数，默认 60000，最大 300000",
+                        },
+                    },
+                    required: ["command"],
+                },
+            }
+        },
+        pathArg: null,
+        requiresApproval: true,
+        run: async (args) => {
+            const command = String(args.command ?? '').trim()
+            if (!command) throw new Error('command 不能为空')
+
+            const timeout = Math.min(Number(args.timeout_ms) || 60_000, 300_000)
+
+            const isWin = process.platform === 'win32'
+            const shell = isWin ? 'cmd.exe' : '/bin/sh'
+            const shellFlag = isWin ? '/c' : '-c'
+
+            return new Promise<string>((resolve, reject) => {
+                execFile(
+                    shell, 
+                    [shellFlag, command],
+                    {
+                        cwd: process.cwd(),
+                        timeout,
+                        maxBuffer: 10 * 1024 * 1024,
+                        windowsHide: true,
+                        env: safeEnv(),
+                        encoding: 'buffer'
+                    },
+                    (err, stdout, stderr) => {
+                        const e = err as (Error & { code?: number | string; killed?: boolean }) | null
+
+                        if (e && typeof e.code === 'string') {
+                            reject(new Error(`无法执行命令: ${e.message}`))
+                            return
+                        }
+
+                        const exit = e?.killed ? '超时，已终止' : String(e?.code ?? 0)
+                        const out = truncateOutput(decodeOutput(stdout as Buffer | string))
+                        const errOut = truncateOutput(decodeOutput(stderr as Buffer | string))
+
+                        resolve(
+                            [
+                                `退出码: ${exit}`,
+                                out ? `--- stdout ---\n${out}` : '',
+                                errOut ? `--- stderr ---\n${errOut}` : '',
+                            ].filter(Boolean).join('\n')
+                        )
+                    }
+                )
+            })
         }
     }
 ]
