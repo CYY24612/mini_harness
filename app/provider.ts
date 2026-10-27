@@ -1,3 +1,4 @@
+import { parse } from 'path'
 import type { Tool } from './tools.ts'
 import type { ChatCompletion, ChatMessage, ToolCall, ToolDefinition } from './types.ts'
 
@@ -11,8 +12,30 @@ export type StreamEvent =
     | { type: 'text'; text: string }
     | { type: 'thinking' }
     | { type: 'thinking-end' }
+    | { type: 'usage'; prompt: number; completion: number; reasoning: number }
 
 export type AssistantMessage = ChatCompletion['choices'][0]['message']
+
+function nextBoundary(buf: string): { index: number; length: number } | null {
+    const lf = buf.indexOf('\n\n')
+    const crlf = buf.indexOf('\r\n\r\n')
+    if (lf === -1 && crlf === -1) return null
+    if (crlf !== -1 && (lf === -1 || crlf < lf)) return { index: crlf, length: 4 }
+    return { index: lf, length: 2 }
+}
+
+function extractData(block: string): string | null {
+    const parts: string[] = []
+    for (const rawLine of block.split('\n')) {
+        const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+        if (line === '') continue
+        if (line.startsWith(':')) continue          // 注释 / 心跳
+        if (!line.startsWith('data:')) continue     // event: / id: / retry: 忽略
+        const value = line.slice(5)
+        parts.push(value.startsWith(' ') ? value.slice(1) : value)
+    }
+    return parts.length > 0 ? parts.join('\n') : null
+}
 
 export async function chatStream(
     config: ApiConfig,
@@ -47,37 +70,49 @@ export async function chatStream(
 
     const decoder = new TextDecoder()
     let buffer = ''
-    let inTinking = false
+    let inThinking = false
 
     outer: for await (const chunk of response.body) {
         buffer += decoder.decode(chunk, { stream: true })
         
-        while (buffer.indexOf('\n\n') !== -1)
+        while (true)
         {
-            const p = buffer.indexOf('\n\n')
-            const event = buffer.slice(0, p)
-            buffer = buffer.slice(p + 2)
+            const boundary = nextBoundary(buffer)
+            if (!boundary) break
             
-            const payload = event.slice(5).trim()
+            const block = buffer.slice(0, boundary.index)
+            buffer = buffer.slice(boundary.index + boundary.length)
+            
+            const payload = extractData(block)
+            if (payload === null) continue
             if (payload === '[DONE]') break outer
             
             let parsed: any
             try {
                 parsed = JSON.parse(payload)
             } catch {
-                continue
+                throw new Error(`SSE 载荷不是合法 JSON: ${payload.slice(0, 200)}`)
+            }
+            
+            if (parsed.usage) {
+                onEvent({
+                    type: 'usage',
+                    prompt: parsed.usage.prompt_tokens ?? 0,
+                    completion: parsed.usage.completion_tokens ?? 0,
+                    reasoning: parsed.usage.completion_tokens_details?.reasoning_tokens ?? 0,
+                })
             }
             
             const delta = parsed.choices?.[0]?.delta
             if (!delta) continue
 
-            if (delta.reasoning_content && !inTinking) {
-                inTinking = true
+            if (delta.reasoning_content && !inThinking) {
+                inThinking = true
                 onEvent({ type: 'thinking' })
             }
             if (delta.content) {
-                if (inTinking) {
-                    inTinking = false
+                if (inThinking) {
+                    inThinking = false
                     onEvent({ type: 'thinking-end' })
                 }
                 onEvent({ type: 'text', text: delta.content })

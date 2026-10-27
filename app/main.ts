@@ -105,6 +105,12 @@ function render(event: AgentEvent): void {
         case 'tool-start': console.log(`\n⚙ ${event.name} ${event.args}`); break
         case 'tool-end':   console.log(`  → ${event.content.split('\n')[0].slice(0, 80)}`); break
         case 'step-limit': console.log('\n[达到步数上限，强制结束这一轮对话]'); break
+        case 'usage':
+            console.log(
+                `  ⤷ 上下文 ${event.prompt} tokens · 输出 ${event.completion}` +
+                (event.reasoning > 0 ? `（其中思考 ${event.reasoning}）` : '')
+            )
+            break
     }
 }
 

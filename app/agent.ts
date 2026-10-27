@@ -1,13 +1,12 @@
 import { chatStream } from './provider.ts'
+import type { StreamEvent } from './provider.ts'
 import { tools, runTool, type Approver } from './tools.ts'
 import type { ApiConfig } from './provider.ts'
 import type { ChatMessage } from './types.ts'
 import type { Session } from './session.ts'
 
 export type AgentEvent =
-    | { type: 'text'; text: string }
-    | { type: 'thinking' }
-    | { type: 'thinking-end' }
+    | StreamEvent
     | { type: 'answer-end' }
     | { type: 'tool-start'; name: string; args: string }
     | { type: 'tool-end'; content: string }
@@ -42,8 +41,8 @@ export async function runTurn(
             let content: string
             emit({ type: 'tool-start', name: call.function.name, args: call.function.arguments})
 
-            const args = JSON.parse(call.function.arguments)
             try {
+                const args = JSON.parse(call.function.arguments)
                 content = await runTool(call.function.name, args, approve)
             } catch (err) {
                 content = `Error: ${err instanceof Error ? err.message : String(err)}`
