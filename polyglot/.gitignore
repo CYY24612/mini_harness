@@ -1,0 +1,7 @@
+target/
+obj/
+bin/
+__pycache__/
+.dotnet-home/
+.nuget/
+*.log

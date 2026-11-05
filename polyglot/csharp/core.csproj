@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ★ 关键观察：HttpClient 和 System.Text.Json 都在 .NET 基础类库（BCL）里，
+      所以这个版本和 Python 一样是零第三方依赖。
+
+      如果目标框架版本报错，改成你本机装的那个 SDK 对应的 netX.0
+      （用 dotnet 空格 list-sdks 查看已安装版本；注意 XML 注释里不能出现两个连字符）。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>core</AssemblyName>
+    <RootNamespace>Core</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+</Project>

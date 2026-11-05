@@ -1,0 +1,16 @@
+[package]
+name = "core"
+version = "0.1.0"
+edition = "2021"
+
+# ★ 关键观察：Rust 标准库里 **没有** HTTP 客户端，也 **没有** JSON 解析。
+#   这两个能力在 Python / C# / Node 里都是内置的。
+#
+#   reqwest 的 blocking 特性让我们可以不用 tokio —— 少一个异步运行时依赖，
+#   也让这个版本和 Python 版在同一抽象层次上（同步阻塞读行）。
+[dependencies]
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 2
