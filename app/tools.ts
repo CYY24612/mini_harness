@@ -1,9 +1,8 @@
 import type { ToolDefinition } from './types.ts'
-import { readFile, readdir, writeFile, mkdir } from 'node:fs/promises'
+import { readFile, readdir, writeFile, mkdir, stat } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
-import { resolve, relative, isAbsolute, sep, basename, extname, dirname } from 'node:path'
+import { resolve, relative, isAbsolute, sep, basename, extname, dirname, join } from 'node:path'
 import { execFile } from "node:child_process"
-import { stderr } from 'node:process'
 
 const IS_WIN = process.platform === 'win32'
 
@@ -257,7 +256,184 @@ export const tools: Tool[] = [
                 )
             })
         }
-    }
+    },
+    {
+        definition: {
+            type: "function",
+            function: {
+                name: "search",
+                description:
+                    "在项目目录里按内容搜索文本，返回 `相对路径:行号: 行内容`。" +
+                    "用于定位代码：某个函数在哪定义、某个标识符在哪出现。" +
+                    "比用 read_file 逐个读大文件便宜得多 —— 只返回匹配行，不返回全文。" +
+                    "自动跳过 node_modules / .git / 二进制文件 / 敏感文件。" +
+                    "不区分大小写；不支持正则。结果超过上限会截断。" + 
+                    "结果按文件分组、匹配多的文件在前；条数上限只限制明细，不隐藏命中的文件。",
+                parameters: {
+                    type: "object",
+                    properties: {
+                        pattern: {
+                            type: "string",
+                            description: "要搜索的文本（不区分大小写的纯文本，不支持正则）",
+                        },
+                        path: {
+                            type: "string",
+                            description: "搜索范围的起点，'.' 表示整个工作目录；也可以只搜某个子目录",
+                        },
+                        max_results: {
+                            type: "number",
+                            description: "最多返回多少条，默认 50, 上限 200",
+                        },
+                    },
+                    required: ["pattern", "path"],
+                },
+            },
+        },
+        pathArg: 'path',
+        requiresApproval: false,
+        run: async (args) => {
+            const pattern = String(args.pattern ?? '')
+            if (!pattern) throw new Error('pattern 不能为空')
+
+            const needle = pattern.toLowerCase()
+            const maxResults = Math.min(Number(args.max_results) || 50, 200)
+
+            const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'session', 'eval-scratch'])
+            const MAX_FILE_BYTES = 512 * 1024
+            const MAX_SCAN_MATCHES = 5000
+
+            const byFile = new Map<string, string[]>()
+            let scanMatches = 0
+            let skippedBinary = 0
+            let skippedSecret = 0
+
+            /** 处理单个文件：敏感检查 → 读 → 匹配 → 收进 byFile */
+            async function collectFile(full: string): Promise<void> {
+                if (scanMatches >= MAX_SCAN_MATCHES) return
+
+                try {
+                    assertNotSecret(full)
+                } catch {
+                    skippedSecret += 1
+                    return
+                }
+
+                let text: string
+                try {
+                    const buf = await withRetry(() => readFile(full))
+                    if (buf.length > MAX_FILE_BYTES) return
+                    if (buf.includes(0)) {
+                        skippedBinary += 1
+                        return
+                    }
+                    text = buf.toString('utf8')
+                } catch {
+                    return
+                }
+
+                const rel = relative(process.cwd(), full)
+                const lines = text.split(/\r?\n/)
+
+                for (let i = 0; i < lines.length; i += 1) {
+                    if (!lines[i].toLowerCase().includes(needle)) continue
+                    if (scanMatches >= MAX_SCAN_MATCHES) return
+                    scanMatches += 1
+
+                    let bucket = byFile.get(rel)
+                    if (!bucket) {
+                        bucket = []
+                        byFile.set(rel, bucket)
+                    }
+                    bucket.push(`${i + 1}: ${lines[i].trim().slice(0, 200)}`)
+                }
+            }
+
+            async function walk(dir: string): Promise<void> {
+                if (scanMatches >= MAX_SCAN_MATCHES) return
+
+                let entries
+                try {
+                    entries = await readdir(dir, { withFileTypes: true })
+                } catch {
+                    return
+                }
+
+                for (const entry of entries) {
+                    if (scanMatches >= MAX_SCAN_MATCHES) return
+                    const full = join(dir, entry.name)
+
+                    if (entry.isDirectory()) {
+                        if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue
+                        await walk(full)
+                        continue
+                    }
+
+                    // 符号链接的 isFile() 也是 false，天然被跳过
+                    if (!entry.isFile()) continue
+                    await collectFile(full)
+                }
+            }
+
+            // path 可以是目录，也可以是单个文件
+            const rootStat = await stat(args.path).catch(() => null)
+            if (!rootStat) {
+                throw new Error(`path 不存在或无法访问：${args.path}`)
+            }
+            if (rootStat.isFile()) {
+                await collectFile(args.path)
+            } else {
+                await walk(args.path)
+            }
+
+            const skipped: string[] = []
+            if (skippedBinary > 0) skipped.push(`${skippedBinary} 个二进制文件`)
+            if (skippedSecret > 0) skipped.push(`${skippedSecret} 个敏感文件`)
+            const skippedLine = skipped.length > 0 ? `（已跳过 ${skipped.join('、')}）` : ''
+
+            if (byFile.size === 0) {
+                return `没有找到包含 "${pattern}" 的行。${skippedLine}`
+            }
+
+            const ordered = [...byFile.entries()].sort((a, b) => b[1].length - a[1].length)
+
+            const out: string[] = []
+            let shown = 0
+            let filesShown = 0
+
+            for (const [file, items] of ordered) {
+                if (shown >= maxResults) break
+
+                out.push(`${file}: ${items.length} 处`)
+                filesShown += 1
+
+                let fileShown = 0
+                for (const item of items) {
+                    if (shown >= maxResults) break
+                    out.push(`  ${item}`)
+                    shown += 1
+                    fileShown += 1
+                }
+                if (fileShown < items.length) {
+                    out.push(`  …（此文件还有 ${items.length - fileShown} 处）`)
+                }
+            }
+
+            const restFiles = ordered.length - filesShown
+            const restMatches = scanMatches - shown
+            if (restFiles > 0 || restMatches > 0) {
+                out.push(
+                    `…（已到 ${maxResults} 条明细上限：还有 ${restFiles} 个文件、${restMatches} 处匹配未显示。` +
+                    `把 pattern 写具体，或用 path 缩小范围）`
+                )
+            }
+            if (scanMatches >= MAX_SCAN_MATCHES) {
+                out.push(`…（扫描已到 ${MAX_SCAN_MATCHES} 处上限，结果可能不完整）`)
+            }
+            if (skippedLine) out.push(skippedLine)
+
+            return out.join('\n')
+        },
+    },
 ]
 
 export async function runTool(
