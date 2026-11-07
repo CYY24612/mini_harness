@@ -4,9 +4,15 @@ export interface Ctx {
     has(name: string): boolean
 }
 
+export interface PluginEntry {
+    id: string
+    plugin: Plugin
+    inject?: string[]
+}
+
 export type Plugin = (ctx: Ctx) => void
 
-export function compose(plugins: Plugin[]): Ctx {
+export function compose(plugins: PluginEntry[]): Ctx {
     const services = new Map<string, unknown>()
 
     const ctx : Ctx = {
@@ -25,7 +31,13 @@ export function compose(plugins: Plugin[]): Ctx {
 
     for (let i = 0; i < plugins.length; i++)
     {
-        plugins[i](ctx)
+        const entry = plugins[i]
+        const need = entry.inject ?? []
+
+        for (const name of need) {
+            if (!ctx.has(name)) throw new Error(`${name} 依赖缺失`)
+        }
+        entry.plugin(ctx)
     }
 
     return ctx

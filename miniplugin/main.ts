@@ -1,12 +1,19 @@
-import { compose, type Ctx, type Plugin } from "./container.ts";
+import { compose, type PluginEntry, type Ctx, type Plugin } from "./container.ts";
 
-const pluginA: Plugin = (ctx) => {
-    ctx.provide("greeting", "hello from A")
+const provider: PluginEntry = {
+    id: "provider",
+    plugin: (ctx) => {
+        ctx.provide("greeting", "hello from A")
+    },
 }
 
-const pluginB: Plugin = (ctx) => {
-    const a = ctx.get("greeting")
-    console.log(a)
+const consumer: PluginEntry = {
+    id: "consumer",
+    plugin: (ctx: Ctx) => {
+        const a = ctx.get("greeting")
+        console.log(a)  
+    },
+    inject: ["greeting"]
 }
 
-const ctx = compose([pluginA, pluginB])
+const ctx = compose([provider, consumer])
