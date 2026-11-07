@@ -29,16 +29,37 @@ export function compose(plugins: PluginEntry[]): Ctx {
         }
     }
 
-    for (let i = 0; i < plugins.length; i++)
-    {
-        const entry = plugins[i]
-        const need = entry.inject ?? []
+    let pending = [...plugins]
 
-        for (const name of need) {
-            if (!ctx.has(name)) throw new Error(`${name} 依赖缺失`)
+    let progressed = true
+    while (pending.length > 0 && progressed)
+    {
+        progressed = false
+
+        for (let i = 0; i < pending.length; i++)
+        {
+            const need = pending[i].inject ?? []
+            if (!need.every((n) => ctx.has(n))) continue
+
+            progressed = true
+            console.log(`${pending[i].id}`)
+            pending[i].plugin(ctx)
+            pending.splice(i, 1)
+            i--
         }
-        entry.plugin(ctx)
     }
+
+    if (pending.length > 0)
+    {
+        for (let i = 0; i < pending.length; i++)
+        {
+            const need = pending[i].inject ?? []
+            for (const name of need) {
+                if (!ctx.has(name)) throw new Error(`${pending[i].id} 缺失依赖 ${name}`)
+            }
+        }
+    }
+    
 
     return ctx
 }
