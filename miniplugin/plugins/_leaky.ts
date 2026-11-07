@@ -1,0 +1,6 @@
+// ?????????????????? dispose ????
+export default function plugin(ctx: any): void {
+    ctx.provide('leaky', { startedAt: Date.now() })
+    setInterval(() => {}, 60_000)   // ? ????
+    console.log('  [_leaky] started a timer that nobody will ever clear')
+}

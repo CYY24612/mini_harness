@@ -1,0 +1,8 @@
+[
+  { "id": "session", "name": "session" },
+  { "id": "sandbox", "name": "sandbox" },
+  { "id": "llm", "name": "llm", "config": { "baseUrl": "https://api.deepseek.com", "model": "deepseek-flash" } },
+  { "id": "tools", "name": "tools", "inject": ["sandbox"] },
+  { "id": "agent", "name": "agent", "inject": ["llm", "session", "tools"] },
+  { "id": "repl", "name": "repl", "inject": ["agent", "session"] }  , { "id": "headless", "name": "headless", "inject": ["agent", "session", "cmdline"] }
+]

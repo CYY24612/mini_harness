@@ -1,0 +1,8 @@
+[
+    { "id": "tools", "name": "tools", "inject": ["sandbox"] },
+    { "id": "agent", "name": "agent", "inject": ["llm", "session", "tools"] },
+    { "id": "repl", "name": "repl", "inject": ["agent", "session"] },
+    { "id": "llm", "name": "llm", "config": { "baseUrl": "https://api.deepseek.com", "model": "deepseek-flash" } },
+    { "id": "sandbox", "name": "sandbox" },
+    { "id": "session", "name": "session", "config": { "system": "你是一个本地 coding agent。回答简洁，先看清现状再动手。" } }
+]
